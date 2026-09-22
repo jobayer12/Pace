@@ -38,8 +38,9 @@ Both exit non-zero if a threshold is crossed, so they drop into CI as-is.
 | `EMAIL_TEMPLATE` | `user{id}@loadtest.local` | Address pattern for by-email reads |
 | `WARMUP` | `10s` | Warm-up phase; `0s` disables |
 | `WARMUP_RATE` | `RATE / 10` | Warm-up request rate |
-| `MIX_BY_ID` / `MIX_BY_EMAIL` / `MIX_LIST` | `60` / `40` / `0` | Split of the read budget |
+| `MIX_BY_ID` / `MIX_BY_EMAIL` / `MIX_LIST` | `50` / `30` / `20` | Split of the read budget |
 | `LIST_MAX_PAGE` | `50` | Deepest page the list read requests |
+| `LIST_LIMIT` | `20` | Page size the list read asks for |
 
 ## How the 70/30 split is enforced
 
@@ -95,19 +96,48 @@ If `NODE_ID` is unset, `setup()` assigns a random token and warns.
 
 Orchestration and result aggregation are in the [root readme](../readme.md).
 
-## Why the list endpoint is off by default
+## The list endpoint, and why it is now in the mix
 
-`MIX_LIST` defaults to `0`. `GET /api/users` runs `SELECT count(*)` on every
-call — a full table scan, measured at 342ms on 10M rows and roughly 1.7s on 50M.
+`GET /api/users` returns the page of rows on its own:
 
-Including it does not measure the API, it measures that one scan, and because
-the scan holds a pooled connection for its whole duration it starves every other
-endpoint too. Enable it with `-e MIX_LIST=30` only after the endpoint is fixed;
-the root readme has the two standard remedies.
+```json
+[{ "id": "1", "email": "...", "firstName": "...", "lastName": "...", "createdAt": "..." }]
+```
 
-`LIST_MAX_PAGE` caps paging depth for the same reason: deep `OFFSET` is
-O(offset) in PostgreSQL (924ms at offset 9,000,000), and no real client pages
-that far, so measuring it would be an artefact.
+It used to wrap them in a `{ data, meta }` envelope whose `meta.total` came from
+`SELECT count(*)` — a full table scan, measured at 342ms on 10M rows and roughly
+1.7s on 50M. Including it measured that one scan rather than the API, and
+because the scan held a pooled connection for its whole duration it starved
+every other endpoint too, so `MIX_LIST` defaulted to `0`.
+
+The count is gone, so the endpoint is an ordinary indexed `LIMIT/OFFSET` read
+and `MIX_LIST` defaults to `20`. Measured locally against 50M rows it lands at
+p95 4.3ms, alongside the point lookups rather than three orders of magnitude
+behind them. Set `-e MIX_LIST=0` to leave it out.
+
+**The mix is weights, not percentages.** `performRead()` draws against the sum
+of the three, so `-e MIX_LIST=30` on its own shifts traffic onto the list
+endpoint instead of being silently swallowed. (Drawing against a hard 100 made
+`list` the leftover: with `60/40` already accounting for every roll, a raised
+`MIX_LIST` produced no list traffic at all.) Summing them to 100 just keeps them
+readable as percentages.
+
+**It has its own latency threshold**, `http_req_duration{name:GET /users}` at
+p95 300ms / p99 600ms, added only when `MIX_LIST > 0`. The list read returns
+`LIST_LIMIT` rows after an `OFFSET` skip, so it is legitimately slower than a
+point lookup; folded into `{kind:read}` alone it would pull the shared read
+percentiles around purely with `MIX_LIST`, making two runs at different mixes
+incomparable.
+
+**`LIST_MAX_PAGE` caps paging depth.** Dropping the count left `OFFSET` as the
+endpoint's remaining cost, and it is O(offset) in PostgreSQL — 924ms at offset
+9,000,000. No real client pages that far, so measuring it would be an artefact.
+
+**The array shape is asserted, not assumed.** `setup()` fetches page 1 and
+checks it, and `smoke-test.js` checks every list response. A rollback to the
+envelope would otherwise be invisible: every status stays a healthy 200, and the
+`count(*)` behind it would show up only as an unexplained collapse in list
+latency.
 
 ## Other deliberate choices
 
@@ -122,8 +152,11 @@ thresholds. `WARMUP=0s` measures cold start on purpose.
 and every id and email becomes its own summary row — the same unbounded
 cardinality trap the backend avoids on its Prometheus `route` label.
 
-**Response bodies are discarded.** Only status codes are asserted, so parsing
-them would be load-generator overhead competing with the test.
+**Response bodies are discarded** — in `load-test.js`. Only status codes are
+asserted there, so parsing a page of rows at 2000 req/s would be load-generator
+overhead competing with the test. `smoke-test.js` keeps them: at 10 req/s the
+cost is irrelevant, and it is what lets the rehearsal check the list endpoint's
+shape before the real run.
 
 ## Reading the result
 
@@ -156,7 +189,7 @@ Thresholds still evaluate p99 either way.
 | [`smoke-test.js`](smoke-test.js) | 10 req/s rehearsal over the same code paths |
 | [`lib/config.js`](lib/config.js) | Every knob, and the VU sizing maths |
 | [`lib/api.js`](lib/api.js) | Endpoint wrappers, tagging, 404 handling |
-| [`lib/probe.js`](lib/probe.js) | Pre-run hit-rate sampling |
+| [`lib/probe.js`](lib/probe.js) | Pre-run hit-rate sampling and list-shape check |
 
 ## After a run
 

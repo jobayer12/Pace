@@ -47,11 +47,6 @@ export class UsersRepository {
     );
   }
 
-  async count(): Promise<number> {
-    const result = await this.knex(TABLE).count<{ count: string }[]>({ count: '*' });
-    return Number(result[0]?.count ?? 0);
-  }
-
   async insert(payload: InsertUserRow): Promise<User> {
     const [user] = await knexnest<User>(
       this.knex(TABLE).insert(payload).returning([...USER_COLUMNS]),

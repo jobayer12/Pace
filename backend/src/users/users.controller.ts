@@ -40,12 +40,12 @@ export class UsersController {
     summary: 'List users (paginated)',
     description: 'Ordered by id ascending. Page size is capped at 100.',
   })
-  @ApiOkResponse({ type: PaginatedUsersResponse })
+  @ApiOkResponse({ type: Array<User> })
   @ApiBadRequestResponse({
     description: 'page or limit outside the allowed range.',
     type: ApiErrorResponse,
   })
-  list(@Query() query: ListUsersQueryDto): Promise<PaginatedUsersResponse> {
+  list(@Query() query: ListUsersQueryDto): Promise<Array<User>> {
     return this.usersService.list(query);
   }
 

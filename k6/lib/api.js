@@ -1,7 +1,15 @@
 import http from 'k6/http';
 import { check } from 'k6';
 import { Rate } from 'k6/metrics';
-import { API, LIST_MAX_PAGE, READ_MIX, emailForId, randomId } from './config.js';
+import {
+  API,
+  LIST_LIMIT,
+  READ_MIX,
+  READ_MIX_TOTAL,
+  emailForId,
+  randomId,
+  randomPage,
+} from './config.js';
 
 const JSON_HEADERS = { 'Content-Type': 'application/json' };
 
@@ -45,9 +53,33 @@ export function getUserByEmail(email) {
   return res;
 }
 
+/**
+ * The endpoint returns a bare JSON array of rows -- the `{ data, meta }`
+ * envelope went away with the `SELECT count(*)` that used to fill `meta.total`.
+ */
+const isJsonArray = (body) => {
+  try {
+    return Array.isArray(JSON.parse(body));
+  } catch (e) {
+    return false;
+  }
+};
+
 export function listUsers(page, limit) {
   const res = http.get(`${API}/users?page=${page}&limit=${limit}`, tags('GET /users', 'read'));
-  check(res, { 'GET /users -> 200': (r) => r.status === 200 });
+
+  const assertions = { 'GET /users -> 200': (r) => r.status === 200 };
+
+  // Shape is asserted only where the body survives -- smoke-test.js keeps
+  // bodies, the load test discards them. Parsing a page of rows on every
+  // request at 2000 req/s would be generator overhead competing with the test,
+  // and the smoke run already catches a regression back to the envelope before
+  // the load run starts.
+  if (res.status === 200 && res.body) {
+    assertions['GET /users -> array body'] = (r) => isJsonArray(r.body);
+  }
+
+  check(res, assertions);
   return res;
 }
 
@@ -64,9 +96,17 @@ export function createUser(email, firstName, lastName) {
   return res;
 }
 
-/** Picks a read endpoint according to READ_MIX, using a random id each time. */
+/**
+ * Picks a read endpoint according to READ_MIX, using a random id each time.
+ *
+ * The roll is drawn against the sum of the three weights rather than a hard
+ * 100, so the mix stays proportional whatever the operator passes. Drawing
+ * against 100 would make `list` the silent remainder: `-e MIX_LIST=30` on top
+ * of the 60/40 defaults would produce no list traffic at all, because every
+ * roll below 100 lands in one of the first two branches.
+ */
 export function performRead() {
-  const roll = Math.random() * 100;
+  const roll = Math.random() * READ_MIX_TOTAL;
 
   if (roll < READ_MIX.byId) {
     return getUserById(randomId());
@@ -76,6 +116,5 @@ export function performRead() {
     return getUserByEmail(emailForId(randomId()));
   }
 
-  const limit = 20;
-  return listUsers(1 + Math.floor(Math.random() * LIST_MAX_PAGE), limit);
+  return listUsers(randomPage(), LIST_LIMIT);
 }

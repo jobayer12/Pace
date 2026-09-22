@@ -1,8 +1,8 @@
 import http from 'k6/http';
 import { scenario } from 'k6/execution';
-import { API, NODE_ID } from './lib/config.js';
+import { API, NODE_ID, READ_MIX } from './lib/config.js';
 import { createUser, performRead } from './lib/api.js';
-import { probeHitRate } from './lib/probe.js';
+import { probeHitRate, probeListShape } from './lib/probe.js';
 
 /**
  * A 10-second, 10 req/s rehearsal of load-test.js over the same code paths.
@@ -34,7 +34,12 @@ export const options = {
       tags: { kind: 'write' },
     },
   },
-  discardResponseBodies: true,
+  // Unlike the load test, bodies are kept: at 10 req/s the parsing cost is
+  // irrelevant, and it lets the run assert that GET /users answers with a bare
+  // array rather than the old `{ data, meta }` envelope. That check is the
+  // point of the rehearsal -- a test suite reading the wrong shape would still
+  // see 200s and report a clean load run.
+  discardResponseBodies: false,
   setupTimeout: '120s',
   thresholds: {
     // A smoke test is a correctness check, so nothing may fault.
@@ -55,6 +60,9 @@ export function setup() {
 
   const nodeId = NODE_ID || `smoke${Math.random().toString(36).slice(2, 8)}`;
   probeHitRate();
+  if (READ_MIX.list > 0) {
+    probeListShape();
+  }
 
   return { nodeId, runId: `${Date.now()}` };
 }

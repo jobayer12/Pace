@@ -28,26 +28,9 @@ export class UsersService {
     return user;
   }
 
-  async list({ page, limit }: ListUsersQueryDto): Promise<PaginatedResult<User>> {
+  async list({ page, limit }: ListUsersQueryDto): Promise<Array<User>> {
     const offset = (page - 1) * limit;
-    const [users, total] = await Promise.all([
-      this.usersRepository.findPage(limit, offset),
-      this.usersRepository.count(),
-    ]);
-
-    const totalPages = total === 0 ? 0 : Math.ceil(total / limit);
-
-    return {
-      data: users,
-      meta: {
-        page,
-        limit,
-        total,
-        totalPages,
-        hasNextPage: page < totalPages,
-        hasPreviousPage: page > 1,
-      },
-    };
+    return this.usersRepository.findPage(limit, offset);
   }
 
   async create(dto: CreateUserDto): Promise<User> {

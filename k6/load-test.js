@@ -4,10 +4,13 @@ import {
   API,
   DURATION,
   EMAIL_TEMPLATE,
+  LIST_LIMIT,
+  LIST_MAX_PAGE,
   MAX_ID,
   MIN_ID,
   NODE_ID,
   READ_MIX,
+  READ_MIX_TOTAL,
   READ_RATE,
   TOTAL_RATE,
   WARMUP,
@@ -17,14 +20,10 @@ import {
   vusFor,
 } from './lib/config.js';
 import { createUser, performRead } from './lib/api.js';
-import { probeHitRate } from './lib/probe.js';
+import { probeHitRate, probeListShape } from './lib/probe.js';
 
-// The measured scenarios only start once the warm-up phase has finished.
 const measuredStart = WARMUP_ENABLED ? WARMUP : '0s';
 
-// Reads and writes are separate scenarios rather than a random branch inside
-// one, so each gets an exact arrival rate (70/30 by default) and its own
-// latency thresholds, instead of a split that only holds on average.
 const scenarios = {
   reads: {
     executor: 'constant-arrival-rate',
@@ -64,31 +63,27 @@ if (WARMUP_ENABLED) {
   };
 }
 
+const thresholds = {
+  dropped_iterations: ['count<1'],
+  'http_req_failed{kind:read}': ['rate<0.01'],
+  'http_req_failed{kind:write}': ['rate<0.01'],
+  'http_req_duration{kind:read}': ['p(95)<250', 'p(99)<500'],
+  'http_req_duration{kind:write}': ['p(95)<400', 'p(99)<800'],
+  checks: ['rate>0.99'],
+};
+if (READ_MIX.list > 0) {
+  thresholds['http_req_duration{name:GET /users}'] = ['p(95)<300', 'p(99)<600'];
+  thresholds['http_req_failed{name:GET /users}'] = ['rate<0.01'];
+}
+
 export const options = {
   scenarios,
 
-  // Only status codes are asserted, so parsing and retaining the response
-  // bodies would just be load-generator overhead competing with the test.
   discardResponseBodies: true,
 
   setupTimeout: '120s',
 
-  thresholds: {
-    // The headline question -- did this generator actually sustain its target
-    // rate? An arrival-rate executor drops an iteration whenever no VU is free
-    // to run it, so a non-zero count means the run did NOT apply the requested
-    // req/s, and the latency figures describe a lighter load than asked for.
-    // Treat any latency result reported with dropped iterations as invalid.
-    dropped_iterations: ['count<1'],
-
-    // 404 is an expected outcome for a random id (see lib/api.js), so these
-    // cover genuine faults only: 5xx, timeouts, connection errors.
-    'http_req_failed{kind:read}': ['rate<0.01'],
-    'http_req_failed{kind:write}': ['rate<0.01'],
-    'http_req_duration{kind:read}': ['p(95)<250', 'p(99)<500'],
-    'http_req_duration{kind:write}': ['p(95)<400', 'p(99)<800'],
-    checks: ['rate>0.99'],
-  },
+  thresholds,
 };
 
 export function setup() {
@@ -98,15 +93,13 @@ export function setup() {
       `API is not reachable at ${API} (status ${ping.status}). Start the backend first.`,
     );
   }
-
-  // Unique per generator. Two VMs generating the same address would collide on
-  // the unique index and report a 409 that looks like a server fault.
   const nodeId = NODE_ID || `n${Math.random().toString(36).slice(2, 8)}`;
   const runId = `${Date.now()}`;
 
   console.log(
     `node ${nodeId} | target ${TOTAL_RATE} req/s = ${READ_RATE} read + ${WRITE_RATE} write ` +
-      `| read mix id/email/list = ${READ_MIX.byId}/${READ_MIX.byEmail}/${READ_MIX.list}`,
+      `| read mix id/email/list = ${READ_MIX.byId}/${READ_MIX.byEmail}/${READ_MIX.list}` +
+      (READ_MIX_TOTAL === 100 ? '' : ` of ${READ_MIX_TOTAL}`),
   );
   if (!NODE_ID) {
     console.warn(
@@ -114,22 +107,22 @@ export function setup() {
         `on several machines.`,
     );
   }
-  if (READ_MIX.list > 0) {
-    console.warn(
-      `MIX_LIST=${READ_MIX.list}: GET /users runs SELECT count(*) on every call, a full table ` +
-        `scan (~1.7s on 50M rows). Expect this endpoint, not the API, to dominate the results.`,
+  if (READ_MIX_TOTAL <= 0) {
+    throw new Error(
+      'MIX_BY_ID, MIX_BY_EMAIL and MIX_LIST are all zero -- there is no read endpoint left to ' +
+        'call. Set at least one above zero.',
     );
   }
 
   probeHitRate();
 
+  if (READ_MIX.list > 0) {
+    console.log(`list reads: pages 1..${LIST_MAX_PAGE} at limit=${LIST_LIMIT}`);
+    probeListShape();
+  }
+
   return { nodeId, runId, emailTemplate: EMAIL_TEMPLATE, minId: MIN_ID, maxId: MAX_ID };
 }
-
-/**
- * Unique per generator, per run and per iteration, so a 409 is always a real
- * defect rather than two VMs colliding.
- */
 const uniqueEmail = (prefix, data) =>
   `${prefix}-${data.nodeId}-${data.runId}-${scenario.iterationInTest}@loadtest.local`;
 
@@ -140,8 +133,6 @@ export function read() {
 export function write(data) {
   createUser(uniqueEmail('load', data), 'Load', `User${scenario.iterationInTest}`);
 }
-
-/** Exercises both paths, so the write path is warm too and not just reads. */
 export function warmup(data) {
   performRead();
   createUser(uniqueEmail('warmup', data), 'Warmup', 'User');

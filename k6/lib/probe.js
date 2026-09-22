@@ -1,5 +1,5 @@
 import http from 'k6/http';
-import { API, MAX_ID, MIN_ID, emailForId, randomId } from './config.js';
+import { API, LIST_LIMIT, MAX_ID, MIN_ID, emailForId, randomId } from './config.js';
 
 /**
  * Samples the id range before the run starts and reports how often a random id
@@ -54,4 +54,50 @@ export function probeHitRate(samples = 20) {
   }
 
   return { idRate, emailRate };
+}
+
+/**
+ * Confirms GET /api/users still answers with a bare array before the run
+ * starts.
+ *
+ * The endpoint used to wrap its rows in `{ data, meta }`, where `meta.total`
+ * came from a `SELECT count(*)` -- a full table scan that made the endpoint far
+ * too expensive to include in the mix. Now that it returns the page alone it is
+ * in the default mix, so a rollback of that change has to be loud: it would
+ * otherwise show up only as an unexplained collapse in list latency, with every
+ * status still a healthy 200.
+ */
+export function probeListShape() {
+  const res = http.get(`${API}/users?page=1&limit=${LIST_LIMIT}`);
+
+  if (res.status !== 200) {
+    console.warn(`WARNING: GET /users?page=1 returned ${res.status}; list reads will all fail.`);
+    return { ok: false, rows: 0 };
+  }
+
+  let body;
+  try {
+    body = JSON.parse(res.body);
+  } catch (e) {
+    console.warn('WARNING: GET /users returned a body that is not JSON.');
+    return { ok: false, rows: 0 };
+  }
+
+  if (!Array.isArray(body)) {
+    const keys = Object.keys(body || {}).join(', ');
+    console.warn(
+      `WARNING: GET /users returned an object ({ ${keys} }), not an array. The tests expect the ` +
+        `page of rows on its own. If the pagination envelope is back, so is the SELECT count(*) ` +
+        `behind it -- set -e MIX_LIST=0 before reading anything into these numbers.`,
+    );
+    return { ok: false, rows: 0 };
+  }
+
+  console.log(`list shape ok | GET /users?limit=${LIST_LIMIT} returned ${body.length} rows`);
+
+  if (body.length === 0) {
+    console.warn('WARNING: page 1 of GET /users is empty -- the table looks empty.');
+  }
+
+  return { ok: true, rows: body.length };
 }

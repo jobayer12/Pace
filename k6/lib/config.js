@@ -62,24 +62,38 @@ export const NODE_ID = __ENV.NODE_ID || '';
 /**
  * Split of the read budget across the three read endpoints, in percent.
  *
- * `list` defaults to 0 on purpose. GET /api/users runs `SELECT count(*)` on
- * every call, which is a full table scan: measured at 342ms on 10M rows, and
- * roughly 1.7s on 50M. Including it does not measure the API, it measures that
- * one scan, and it will saturate the database long before the target rate is
- * reached. Enable it only once the endpoint has been fixed (see the README).
+ * `list` used to default to 0: GET /api/users ran `SELECT count(*)` on every
+ * call to build its pagination envelope -- a full table scan, measured at 342ms
+ * on 10M rows and roughly 1.7s on 50M -- so including it measured that one scan
+ * rather than the API. The endpoint now returns the page of rows and nothing
+ * else, which is an ordinary indexed LIMIT/OFFSET read, so it is part of the
+ * default mix.
+ *
+ * The three are treated as relative weights, not absolutes: performRead() draws
+ * against their sum, so `-e MIX_LIST=30` alone still shifts traffic onto the
+ * list endpoint instead of being silently ignored. Keeping them summed to 100
+ * just makes them readable as percentages.
  */
 export const READ_MIX = {
-  byId: Number(__ENV.MIX_BY_ID || 60),
-  byEmail: Number(__ENV.MIX_BY_EMAIL || 40),
-  list: Number(__ENV.MIX_LIST || 0),
+  byId: Number(__ENV.MIX_BY_ID || 50),
+  byEmail: Number(__ENV.MIX_BY_EMAIL || 30),
+  list: Number(__ENV.MIX_LIST || 20),
 };
 
+export const READ_MIX_TOTAL = READ_MIX.byId + READ_MIX.byEmail + READ_MIX.list;
+
 /**
- * Deepest page the list read will request. Deep offsets are O(offset) in
- * Postgres -- `OFFSET 9000000` measured at 924ms on 10M rows -- and no real
- * client pages that far, so measuring it would be an artefact.
+ * Deepest page the list read will request, and the page size it asks for.
+ *
+ * Dropping the count left `OFFSET` as the endpoint's remaining cost, and it is
+ * O(offset) in PostgreSQL -- `OFFSET 9000000` measured at 924ms on 10M rows.
+ * No real client pages that far, so measuring it would be an artefact; the cap
+ * keeps the read representative of what clients actually ask for.
  */
 export const LIST_MAX_PAGE = Number(__ENV.LIST_MAX_PAGE || 50);
+export const LIST_LIMIT = Number(__ENV.LIST_LIMIT || 20);
+
+export const randomPage = () => 1 + Math.floor(Math.random() * LIST_MAX_PAGE);
 
 export const randomId = () => MIN_ID + Math.floor(Math.random() * (MAX_ID - MIN_ID + 1));
 
