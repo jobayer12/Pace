@@ -26,8 +26,6 @@ import { PaginatedUsersResponse } from './dto/paginated-users.response';
 import { User } from './user.entity';
 import { UsersService } from './users.service';
 
-// bigint ids exceed Number.MAX_SAFE_INTEGER, so they are validated as digit
-// strings and passed through to the query untouched.
 const ID_PATTERN = /^\d+$/;
 
 @ApiTags('users')

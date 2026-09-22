@@ -20,10 +20,6 @@ export class PaginationMeta {
   hasPreviousPage!: boolean;
 }
 
-/**
- * Generic shape used by services. OpenAPI cannot express a generic directly, so
- * each endpoint documents a concrete subclass (e.g. PaginatedUsersResponse).
- */
 export interface PaginatedResult<T> {
   data: T[];
   meta: PaginationMeta;

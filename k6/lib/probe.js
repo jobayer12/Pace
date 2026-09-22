@@ -1,15 +1,6 @@
 import http from 'k6/http';
 import { API, LIST_LIMIT, MAX_ID, MIN_ID, emailForId, randomId } from './config.js';
 
-/**
- * Samples the id range before the run starts and reports how often a random id
- * actually finds a row.
- *
- * This is the guard against a run that "passes" against the wrong database: if
- * MAX_ID is far beyond the real max(id), or the table is empty, every read is a
- * 404. Those are not counted as failures by design, so without this probe the
- * run would look perfectly healthy while measuring nothing but index misses.
- */
 export function probeHitRate(samples = 20) {
   let idHits = 0;
   let emailHits = 0;
@@ -56,17 +47,6 @@ export function probeHitRate(samples = 20) {
   return { idRate, emailRate };
 }
 
-/**
- * Confirms GET /api/users still answers with a bare array before the run
- * starts.
- *
- * The endpoint used to wrap its rows in `{ data, meta }`, where `meta.total`
- * came from a `SELECT count(*)` -- a full table scan that made the endpoint far
- * too expensive to include in the mix. Now that it returns the page alone it is
- * in the default mix, so a rollback of that change has to be loud: it would
- * otherwise show up only as an unexplained collapse in list latency, with every
- * status still a healthy 200.
- */
 export function probeListShape() {
   const res = http.get(`${API}/users?page=1&limit=${LIST_LIMIT}`);
 

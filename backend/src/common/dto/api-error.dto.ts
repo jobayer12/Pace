@@ -1,6 +1,5 @@
 import { ApiProperty } from '@nestjs/swagger';
 
-/** The shape of Nest's built-in HttpException responses. */
 export class ApiErrorResponse {
   @ApiProperty({ example: 404 })
   statusCode!: number;

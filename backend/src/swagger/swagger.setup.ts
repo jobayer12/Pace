@@ -3,7 +3,6 @@ import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 
 export const SWAGGER_PATH = 'docs';
 
-/** `SWAGGER_ENABLED=false` turns the docs off; anything else leaves them on. */
 export const isSwaggerEnabled = (env: NodeJS.ProcessEnv = process.env): boolean =>
   env.SWAGGER_ENABLED !== 'false';
 

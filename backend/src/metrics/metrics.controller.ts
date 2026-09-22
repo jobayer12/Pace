@@ -8,13 +8,6 @@ import { MetricsService } from './metrics.service';
 export class MetricsController {
   constructor(private readonly metrics: MetricsService) {}
 
-  /**
-   * Prometheus scrape endpoint. Served outside the global `/api` prefix at
-   * `GET /metrics`, which is where scrapers look by default.
-   *
-   * Uses @Res directly because the body is Prometheus' line-based text
-   * exposition format, not JSON.
-   */
   @Get()
   @ApiOperation({
     summary: 'Prometheus scrape endpoint',

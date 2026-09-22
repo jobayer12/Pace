@@ -1,28 +1,3 @@
-// Command generate-dummy-data bulk-loads dummy users into the Pace backend's
-// `users` table.
-//
-// # Uniqueness strategy
-//
-// Every row's email is derived from its primary key:
-//
-//	id    = start + n
-//	email = "user<id>@loadtest.local"
-//
-// `start` defaults to max(id)+1, so a run can never overlap rows that already
-// exist, and re-running simply continues where the last one stopped. The id
-// range is then carved into contiguous, non-overlapping batches handed to
-// workers, so no two goroutines can ever produce the same address either.
-//
-// Uniqueness is therefore structural rather than checked: there is no random
-// generation, no retry loop and no ON CONFLICT clause, because a collision is
-// not representable. That is also what makes COPY safe to use, which is what
-// makes loading 50M rows take minutes instead of hours.
-//
-// Tying the email to the id is deliberate: it lets the k6 suite reach any row
-// by either key with EMAIL_TEMPLATE='user{id}@loadtest.local'.
-//
-// Names are random (gofakeit) rather than derived from the id -- they are not a
-// lookup key, so they only need to look plausible and vary in length.
 package main
 
 import (
@@ -114,8 +89,6 @@ func run(cfg config) error {
 		return err
 	}
 
-	// Ctrl-C cancels the context; in-flight COPY calls are rolled back by the
-	// server, so the table is left holding only fully completed batches.
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
@@ -144,13 +117,12 @@ func run(cfg config) error {
 
 	start := cfg.start
 	if start <= 0 {
-		// An index-only max() on the primary key: fast even on a huge table.
 		if err := pool.QueryRow(ctx,
 			"SELECT COALESCE(MAX(id), 0) + 1 FROM users").Scan(&start); err != nil {
 			return fmt.Errorf("determine starting id: %w", err)
 		}
 	}
-	end := start + cfg.total // exclusive
+	end := start + cfg.total
 
 	fmt.Printf("target      : %s\n", redact(dsn))
 	fmt.Printf("rows        : %s\n", comma(cfg.total))
@@ -178,8 +150,6 @@ func run(cfg config) error {
 		comma(done), elapsed.Round(time.Second), comma(perSecond(done, elapsed)))
 
 	if cfg.resetSeq {
-		// Without this the table's sequence still points inside the range just
-		// written by hand, and the next INSERT from the API would collide.
 		const resetSQL = `SELECT setval(
 			pg_get_serial_sequence('users', 'id'),
 			COALESCE((SELECT MAX(id) FROM users), 0) + 1,
@@ -193,7 +163,6 @@ func run(cfg config) error {
 	return nil
 }
 
-// batch is a half-open id range [from, to) owned exclusively by one worker.
 type batch struct {
 	from int64
 	to   int64
@@ -215,8 +184,6 @@ func load(ctx context.Context, pool *pgxpool.Pool, cfg config, start, end int64,
 		}()
 	}
 
-	// Batches are contiguous and non-overlapping, so the ids -- and therefore
-	// the emails -- handed to any two workers are always disjoint.
 dispatch:
 	for from := start; from < end; from += int64(cfg.batch) {
 		to := min(from+int64(cfg.batch), end)
@@ -245,12 +212,6 @@ var columns = []string{"id", "email", "first_name", "last_name", "created_at"}
 func worker(ctx context.Context, pool *pgxpool.Pool, cfg config, jobs <-chan batch, inserted *atomic.Int64) error {
 	maxAge := time.Duration(cfg.daysBack) * 24 * time.Hour
 
-	// Each worker owns its own Faker. gofakeit's package-level functions and
-	// New() both guard a shared random source with a mutex, which every worker
-	// would then contend on twice per row. NewUnlocked drops the lock, which is
-	// safe precisely because this instance never leaves this goroutine.
-	// A zero seed makes gofakeit draw a crypto-random one, so the workers do
-	// not all generate the same sequence.
 	faker := gofakeit.NewUnlocked(0)
 
 	for b := range jobs {
@@ -311,21 +272,11 @@ func reportProgress(ctx context.Context, inserted *atomic.Int64, total int64, be
 	}
 }
 
-// resolveDSN prefers -dsn, then DATABASE_URL, then the DB_* variables, so the
-// loader and the API always agree on which database they are pointed at.
 func resolveDSN(cfg config) (string, error) {
 	if cfg.dsn != "" {
 		return cfg.dsn, nil
 	}
 
-	// Files are loaded one at a time rather than in a single godotenv.Load
-	// call: that call stops at its first error, so a missing local .env would
-	// prevent the fallback from ever being read.
-	//
-	// godotenv never overwrites a variable that is already set, which gives the
-	// precedence for free: the real environment beats the first file, and the
-	// first file beats the ones after it. A missing file is not an error --
-	// the values may be coming from the environment instead.
 	for _, path := range strings.Split(cfg.envFile, ",") {
 		path = strings.TrimSpace(path)
 		if path == "" {
@@ -347,9 +298,6 @@ func resolveDSN(cfg config) (string, error) {
 		return fallback
 	}
 
-	// Built through net/url rather than fmt.Sprintf so that a password
-	// containing @ / : or any other reserved character is escaped instead of
-	// silently producing a malformed connection string.
 	dsn := url.URL{
 		Scheme: "postgres",
 		User:   url.UserPassword(get("DB_USER", "postgres"), get("DB_PASSWORD", "")),

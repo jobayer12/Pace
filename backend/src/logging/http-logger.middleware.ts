@@ -19,8 +19,6 @@ export class HttpLoggerMiddleware implements NestMiddleware {
       return;
     }
 
-    // Honour an inbound correlation id so a request can be traced across
-    // services; mint one otherwise. Echoed back so the caller can quote it.
     const inbound = req.headers[REQUEST_ID_HEADER];
     const requestId = (Array.isArray(inbound) ? inbound[0] : inbound) || randomUUID();
     req.requestId = requestId;

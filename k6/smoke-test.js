@@ -4,13 +4,6 @@ import { API, NODE_ID, READ_MIX } from './lib/config.js';
 import { createUser, performRead } from './lib/api.js';
 import { probeHitRate, probeListShape } from './lib/probe.js';
 
-/**
- * A 10-second, 10 req/s rehearsal of load-test.js over the same code paths.
- *
- * Run it on every VM before the real thing: a wrong BASE_URL, an unmigrated
- * database or a MAX_ID that matches nothing fails here in seconds, rather than
- * producing a full load run whose reads were all misses.
- */
 export const options = {
   scenarios: {
     reads: {
@@ -34,20 +27,11 @@ export const options = {
       tags: { kind: 'write' },
     },
   },
-  // Unlike the load test, bodies are kept: at 10 req/s the parsing cost is
-  // irrelevant, and it lets the run assert that GET /users answers with a bare
-  // array rather than the old `{ data, meta }` envelope. That check is the
-  // point of the rehearsal -- a test suite reading the wrong shape would still
-  // see 200s and report a clean load run.
   discardResponseBodies: false,
   setupTimeout: '120s',
   thresholds: {
-    // A smoke test is a correctness check, so nothing may fault.
     http_req_failed: ['rate<0.01'],
     checks: ['rate>0.99'],
-    // Unlike the load test, this one insists that reads actually find rows --
-    // that is the point of running it. Override with -e MIX_BY_ID=0 if you are
-    // deliberately pointing at an empty table.
     read_id_hit_rate: ['rate>0'],
   },
 };

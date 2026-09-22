@@ -9,7 +9,6 @@ interface KnexQueryEvent {
   sql?: string;
 }
 
-/** The tarn pool behind knex.client.pool. */
 interface TarnPool {
   numUsed(): number;
   numFree(): number;
@@ -17,8 +16,6 @@ interface TarnPool {
   numPendingCreates(): number;
 }
 
-// Keeping the `operation` label to a known set stops a malformed or unusual
-// statement from inventing new label values.
 const KNOWN_OPERATIONS = new Set(['select', 'insert', 'update', 'delete', 'begin', 'commit', 'rollback']);
 
 const operationOf = (sql?: string): string => {
@@ -26,12 +23,6 @@ const operationOf = (sql?: string): string => {
   return first && KNOWN_OPERATIONS.has(first) ? first : 'other';
 };
 
-/**
- * Upper bound on in-flight query timers. A query always emits either
- * 'query-response' or 'query-error', so this should never be reached; it is a
- * backstop so that a driver-level edge case cannot grow the map without limit
- * over a long load test.
- */
 const MAX_TRACKED_QUERIES = 10_000;
 
 @Injectable()
@@ -54,13 +45,6 @@ export class DbMetricsService implements OnModuleInit {
     const poolOf = (): TarnPool | undefined =>
       (this.knex.client as { pool?: TarnPool } | undefined)?.pool;
 
-    // The pool is read at scrape time via `collect` rather than tracked
-    // incrementally, so the reported value is always the pool's real state and
-    // cannot drift out of sync with it.
-    //
-    // `pending_acquires` is the number to watch during a load test: a non-zero
-    // value means requests are queueing for a connection, i.e. the pool -- not
-    // the database -- is the bottleneck.
     new Gauge({
       name: 'db_pool_connections',
       help: 'Knex/tarn connection pool state.',
