@@ -19,6 +19,10 @@ export const setupSwagger = (app: INestApplication, port: number): void => {
       ].join('\n'),
     )
     .setVersion('1.0.0')
+    // Relative first: Swagger UI resolves it against whatever origin serves the
+    // page, so "Try it out" works both on localhost and behind the tunnel
+    // without hitting cross-origin or mixed-content blocks.
+    .addServer('/', 'Same origin')
     .addServer(`http://localhost:${port}`, 'Local')
     .addTag('users', 'User records')
     .addTag('metrics', 'Prometheus scrape endpoint')

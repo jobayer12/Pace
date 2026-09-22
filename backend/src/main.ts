@@ -12,6 +12,18 @@ async function bootstrap(): Promise<void> {
   app.setGlobalPrefix('api', {
     exclude: [{ path: 'metrics', method: RequestMethod.GET }],
   });
+
+  // Cross-origin callers (a frontend on another host). Same-origin callers,
+  // including Swagger UI served by this app, never reach these checks.
+  const corsOrigins = (process.env.CORS_ORIGINS ?? '')
+    .split(',')
+    .map((origin) => origin.trim())
+    .filter(Boolean);
+
+  app.enableCors({
+    origin: corsOrigins.includes('*') ? true : corsOrigins.length > 0 ? corsOrigins : false,
+    credentials: true,
+  });
   app.enableShutdownHooks();
   app.useGlobalPipes(
     new ValidationPipe({
