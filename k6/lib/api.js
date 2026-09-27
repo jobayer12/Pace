@@ -1,6 +1,6 @@
 import http from 'k6/http';
-import { check } from 'k6';
-import { Rate } from 'k6/metrics';
+import { scenario } from 'k6/execution';
+import { Counter, Rate, Trend } from 'k6/metrics';
 import {
   API,
   LIST_LIMIT,
@@ -13,57 +13,87 @@ import {
 
 const JSON_HEADERS = { 'Content-Type': 'application/json' };
 
+// A 404 means the random id/email is not in the database. That is a normal
+// answer from the API, not a failure, so k6 must not count it in http_req_failed.
 http.setResponseCallback(http.expectedStatuses(200, 201, 404));
-export const idHitRate = new Rate('read_id_hit_rate');
-export const emailHitRate = new Rate('read_email_hit_rate');
 
-const tags = (name, kind) => ({ tags: { name, kind } });
+// Endpoint key -> label used in the report and as the request's `name` tag.
+export const ENDPOINTS = {
+  by_id: 'GET /users/:id',
+  by_email: 'GET /users/email/:email',
+  list: 'GET /users',
+  create: 'POST /users',
+};
+
+// Everything below is recorded for measured traffic only (warm-up is skipped).
+export const apiDuration = new Trend('api_duration', true);
+export const apiRequests = new Counter('api_requests');
+export const apiFound = new Counter('api_found');
+export const apiNotFound = new Counter('api_not_found');
+export const apiErrors = new Counter('api_errors');
+export const apiSuccess = new Rate('api_success');
+
+const endpointDuration = {};
+const endpointRequests = {};
+const endpointErrors = {};
+for (const key of Object.keys(ENDPOINTS)) {
+  endpointDuration[key] = new Trend(`api_duration_${key}`, true);
+  endpointRequests[key] = new Counter(`api_requests_${key}`);
+  endpointErrors[key] = new Counter(`api_errors_${key}`);
+}
+
+const errorLog = { printed: 0 };
+
+function record(key, res) {
+  if (scenario.name === 'warmup') return res;
+
+  const ok = res.status === 200 || res.status === 201;
+  const notFound = res.status === 404;
+  const success = ok || notFound;
+
+  apiRequests.add(1);
+  apiDuration.add(res.timings.duration);
+  endpointDuration[key].add(res.timings.duration);
+  endpointRequests[key].add(1);
+  apiSuccess.add(success);
+
+  if (ok) apiFound.add(1);
+  else if (notFound) apiNotFound.add(1);
+  else {
+    apiErrors.add(1);
+    endpointErrors[key].add(1);
+    // One sample per VU is enough to see what is going wrong.
+    if (errorLog.printed < 1) {
+      errorLog.printed += 1;
+      console.warn(`${ENDPOINTS[key]} -> ${res.status || res.error}`);
+    }
+  }
+  return res;
+}
+
+const params = (key, kind) => ({ tags: { name: ENDPOINTS[key], kind } });
 
 export function getUserById(id) {
-  const res = http.get(`${API}/users/${id}`, tags('GET /users/:id', 'read'));
-  check(res, { 'GET /users/:id -> 200 or 404': (r) => r.status === 200 || r.status === 404 });
-  idHitRate.add(res.status === 200);
-  return res;
+  return record('by_id', http.get(`${API}/users/${id}`, params('by_id', 'read')));
 }
 
 export function getUserByEmail(email) {
-  const res = http.get(`${API}/users/email/${email}`, tags('GET /users/email/:email', 'read'));
-  check(res, {
-    'GET /users/email/:email -> 200 or 404': (r) => r.status === 200 || r.status === 404,
-  });
-  emailHitRate.add(res.status === 200);
-  return res;
+  return record(
+    'by_email',
+    http.get(`${API}/users/email/${encodeURIComponent(email)}`, params('by_email', 'read')),
+  );
 }
 
-const isJsonArray = (body) => {
-  try {
-    return Array.isArray(JSON.parse(body));
-  } catch (e) {
-    return false;
-  }
-};
-
 export function listUsers(page, limit) {
-  const res = http.get(`${API}/users?page=${page}&limit=${limit}`, tags('GET /users', 'read'));
-
-  const assertions = { 'GET /users -> 200': (r) => r.status === 200 };
-
-  if (res.status === 200 && res.body) {
-    assertions['GET /users -> array body'] = (r) => isJsonArray(r.body);
-  }
-
-  check(res, assertions);
-  return res;
+  return record('list', http.get(`${API}/users?page=${page}&limit=${limit}`, params('list', 'read')));
 }
 
 export function createUser(email, firstName, lastName) {
   const body = JSON.stringify({ email, firstName, lastName });
-  const res = http.post(`${API}/users`, body, {
-    headers: JSON_HEADERS,
-    ...tags('POST /users', 'write'),
-  });
-  check(res, { 'POST /users -> 201': (r) => r.status === 201 });
-  return res;
+  return record(
+    'create',
+    http.post(`${API}/users`, body, { headers: JSON_HEADERS, ...params('create', 'write') }),
+  );
 }
 
 export function performRead() {

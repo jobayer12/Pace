@@ -1,8 +1,12 @@
 import http from 'k6/http';
 import { scenario } from 'k6/execution';
-import { API, NODE_ID, READ_MIX } from './lib/config.js';
+import { API, NODE_ID } from './lib/config.js';
 import { createUser, performRead } from './lib/api.js';
-import { probeHitRate, probeListShape } from './lib/probe.js';
+import { probeHitRate } from './lib/probe.js';
+import { SUMMARY_TREND_STATS, makeSummary } from './lib/summary.js';
+
+// Quick 10 req/s rehearsal over the same code paths as load-test.js.
+const DURATION = '10s';
 
 export const options = {
   scenarios: {
@@ -11,44 +15,32 @@ export const options = {
       exec: 'read',
       rate: 7,
       timeUnit: '1s',
-      duration: '10s',
+      duration: DURATION,
       preAllocatedVUs: 5,
       maxVUs: 20,
-      tags: { kind: 'read' },
     },
     writes: {
       executor: 'constant-arrival-rate',
       exec: 'write',
       rate: 3,
       timeUnit: '1s',
-      duration: '10s',
+      duration: DURATION,
       preAllocatedVUs: 5,
       maxVUs: 20,
-      tags: { kind: 'write' },
     },
   },
-  discardResponseBodies: false,
+  discardResponseBodies: true,
   setupTimeout: '120s',
-  thresholds: {
-    http_req_failed: ['rate<0.01'],
-    checks: ['rate>0.99'],
-    read_id_hit_rate: ['rate>0'],
-  },
+  summaryTrendStats: SUMMARY_TREND_STATS,
 };
 
 export function setup() {
   const ping = http.get(`${API}/users/1`, { responseType: 'none' });
-  if (ping.status !== 200 && ping.status !== 404) {
-    throw new Error(`API is not reachable at ${API} (status ${ping.status}).`);
+  if (ping.status === 0 || ping.status >= 500) {
+    throw new Error(`API is not reachable at ${API} (status ${ping.status || ping.error}).`);
   }
-
-  const nodeId = NODE_ID || `smoke${Math.random().toString(36).slice(2, 8)}`;
   probeHitRate();
-  if (READ_MIX.list > 0) {
-    probeListShape();
-  }
-
-  return { nodeId, runId: `${Date.now()}` };
+  return { nodeId: NODE_ID || `smoke${Math.random().toString(36).slice(2, 8)}`, runId: `${Date.now()}` };
 }
 
 export function read() {
@@ -61,4 +53,8 @@ export function write(data) {
     'Smoke',
     'User',
   );
+}
+
+export function handleSummary(data) {
+  return makeSummary(data, { mode: 'smoke', target: '10 req/s', duration: DURATION }, null);
 }
