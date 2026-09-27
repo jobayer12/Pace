@@ -46,6 +46,23 @@ Reads use random ids and emails. When a row doesn't exist, the API returns
 - Only other statuses (`5xx`, `409`, `400`, timeouts and connection errors)
   count as `errors`. The first error on each VU is logged so you can see what
   happened.
+
+## Passed vs failed (the 3-second rule)
+
+A request **passes** only if it returns `200`/`201`/`404` **and** answers
+within `SLOW_MS` (default `3000` ms). Everything else **fails**:
+
+| Failure | How it shows up |
+| ------- | --------------- |
+| Response took longer than 3s (good status, too late) | `too slow` |
+| DB query ran longer than 3s | The backend's `statement_timeout` cancels it and returns `500`, shown as `error / no response` |
+| No free DB connection within 3s | The backend returns `500`, shown as `error / no response` |
+| `5xx` / `4xx` (not 404) / connection refused / k6 timeout | `error / no response` |
+
+k6 does not cut off slow requests, so the response-time percentiles still show
+how slow they really were. k6's own `http_req_failed` metric only looks at the
+status code, so it does not count slow responses; use the `failed` line in the
+report.
 - The report shows how many requests were `found` and how many were
   `not found`, for information only.
 
@@ -103,6 +120,8 @@ PER ENDPOINT
 | `LIST_MAX_PAGE` / `LIST_LIMIT` | `50` / `20` | Paging depth and page size for list reads |
 | `NODE_ID` | random | Unique per VM (keeps write emails unique) |
 | `SUMMARY_FILE` | `summary.json` | Where the JSON report is written |
+| `SLOW_MS` | `3000` | Responses slower than this count as failed |
+| `NATIVE_SUMMARY` | off | Set to `1` to also print k6's own counters (`http_reqs`, `http_req_failed`, …) |
 
 ## Running on several VMs
 

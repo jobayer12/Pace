@@ -39,6 +39,9 @@ export const LIST_LIMIT = Number(__ENV.LIST_LIMIT || 20);
 
 export const SUMMARY_FILE = __ENV.SUMMARY_FILE || 'summary.json';
 
+export const SLOW_MS = Number(__ENV.SLOW_MS || 3000);
+export const NATIVE_SUMMARY = (__ENV.NATIVE_SUMMARY || '') !== '';
+
 export const randomPage = () => 1 + Math.floor(Math.random() * LIST_MAX_PAGE);
 
 export const randomId = () => MIN_ID + Math.floor(Math.random() * (MAX_ID - MIN_ID + 1));
@@ -49,9 +52,6 @@ export const vusFor = (rate) => ({
   preAllocatedVUs: Math.max(50, Math.ceil(rate * 0.25)),
   maxVUs: Math.max(100, Math.ceil(rate * 1.0)),
 });
-
-// "1m30s" -> 90. Used to turn request counts into req/s over the measured
-// window only, so setup and warm-up time do not dilute the figure.
 export function durationSeconds(value) {
   const units = { ms: 0.001, s: 1, m: 60, h: 3600 };
   let total = 0;

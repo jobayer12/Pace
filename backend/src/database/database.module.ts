@@ -21,6 +21,8 @@ import { KNEX_CONNECTION } from './knex.constants';
             DB_NAME: config.get<string>('DB_NAME'),
             DB_POOL_MIN: config.get<string>('DB_POOL_MIN'),
             DB_POOL_MAX: config.get<string>('DB_POOL_MAX'),
+            DB_STATEMENT_TIMEOUT_MS: config.get<string>('DB_STATEMENT_TIMEOUT_MS'),
+            DB_ACQUIRE_TIMEOUT_MS: config.get<string>('DB_ACQUIRE_TIMEOUT_MS'),
           } as NodeJS.ProcessEnv),
         );
 

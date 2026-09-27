@@ -8,7 +8,9 @@ export const buildKnexConfig = (env: NodeJS.ProcessEnv = process.env): Knex.Conf
     user: env.DB_USER ?? 'postgres',
     password: env.DB_PASSWORD ?? '',
     database: env.DB_NAME ?? 'postgres',
+    statement_timeout: Number(env.DB_STATEMENT_TIMEOUT_MS ?? 3000),
   },
+  acquireConnectionTimeout: Number(env.DB_ACQUIRE_TIMEOUT_MS ?? 3000),
   pool: {
     min: Number(env.DB_POOL_MIN ?? 2),
     max: Number(env.DB_POOL_MAX ?? 10),

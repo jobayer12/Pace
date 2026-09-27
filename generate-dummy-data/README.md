@@ -30,6 +30,10 @@ DB_PASSWORD=
 DB_NAME=load_testing
 ```
 
+If the password contains `$`, wrap it in **single** quotes (`DB_PASSWORD='p@ss$word'`).
+godotenv expands `$VAR` inside double-quoted and unquoted values, which silently
+truncates the password.
+
 This step is optional — with no local `.env`, the loader falls back to
 `../backend/.env`, so a configured backend needs nothing further.
 

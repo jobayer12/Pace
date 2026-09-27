@@ -6,6 +6,7 @@ import {
   LIST_LIMIT,
   READ_MIX,
   READ_MIX_TOTAL,
+  SLOW_MS,
   emailForId,
   randomId,
   randomPage,
@@ -31,42 +32,53 @@ export const apiRequests = new Counter('api_requests');
 export const apiFound = new Counter('api_found');
 export const apiNotFound = new Counter('api_not_found');
 export const apiErrors = new Counter('api_errors');
+// Good status (200/201/404) but slower than SLOW_MS: counted as failed.
+export const apiSlow = new Counter('api_slow');
 export const apiSuccess = new Rate('api_success');
 
 const endpointDuration = {};
 const endpointRequests = {};
-const endpointErrors = {};
+const endpointFailed = {};
 for (const key of Object.keys(ENDPOINTS)) {
   endpointDuration[key] = new Trend(`api_duration_${key}`, true);
   endpointRequests[key] = new Counter(`api_requests_${key}`);
-  endpointErrors[key] = new Counter(`api_errors_${key}`);
+  endpointFailed[key] = new Counter(`api_errors_${key}`);
 }
 
-const errorLog = { printed: 0 };
+// One sample of each kind per VU is enough to see what is going wrong.
+const errorLog = { error: 0, slow: 0 };
 
 function record(key, res) {
   if (scenario.name === 'warmup') return res;
 
-  const ok = res.status === 200 || res.status === 201;
-  const notFound = res.status === 404;
-  const success = ok || notFound;
+  const duration = res.timings.duration;
+  const goodStatus = res.status === 200 || res.status === 201 || res.status === 404;
+  const slow = goodStatus && duration > SLOW_MS;
 
   apiRequests.add(1);
-  apiDuration.add(res.timings.duration);
-  endpointDuration[key].add(res.timings.duration);
+  apiDuration.add(duration);
+  endpointDuration[key].add(duration);
   endpointRequests[key].add(1);
-  apiSuccess.add(success);
+  apiSuccess.add(goodStatus && !slow);
 
-  if (ok) apiFound.add(1);
-  else if (notFound) apiNotFound.add(1);
-  else {
+  if (!goodStatus) {
     apiErrors.add(1);
-    endpointErrors[key].add(1);
-    // One sample per VU is enough to see what is going wrong.
-    if (errorLog.printed < 1) {
-      errorLog.printed += 1;
-      console.warn(`${ENDPOINTS[key]} -> ${res.status || res.error}`);
+    endpointFailed[key].add(1);
+    if (errorLog.error < 1) {
+      errorLog.error += 1;
+      console.warn(`${ENDPOINTS[key]} -> ${res.status || res.error} after ${duration.toFixed(0)}ms`);
     }
+  } else if (slow) {
+    apiSlow.add(1);
+    endpointFailed[key].add(1);
+    if (errorLog.slow < 1) {
+      errorLog.slow += 1;
+      console.warn(`${ENDPOINTS[key]} -> ${res.status} but took ${duration.toFixed(0)}ms (> ${SLOW_MS}ms)`);
+    }
+  } else if (res.status === 404) {
+    apiNotFound.add(1);
+  } else {
+    apiFound.add(1);
   }
   return res;
 }

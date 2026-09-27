@@ -1,5 +1,5 @@
 import { ENDPOINTS } from './api.js';
-import { durationSeconds } from './config.js';
+import { NATIVE_SUMMARY, SLOW_MS, durationSeconds } from './config.js';
 
 const TREND_STATS = ['avg', 'min', 'med', 'p(90)', 'p(95)', 'p(99)', 'max'];
 export const SUMMARY_TREND_STATS = TREND_STATS;
@@ -26,7 +26,9 @@ function buildReport(data, meta) {
   const found = count(data, 'api_found');
   const notFound = count(data, 'api_not_found');
   const errors = count(data, 'api_errors');
+  const slow = count(data, 'api_slow');
   const success = found + notFound;
+  const failed = errors + slow;
 
   const endpoints = {};
   for (const [key, label] of Object.entries(ENDPOINTS)) {
@@ -36,7 +38,7 @@ function buildReport(data, meta) {
     endpoints[label] = {
       requests: n,
       req_per_sec: seconds > 0 ? n / seconds : 0,
-      errors: count(data, `api_errors_${key}`),
+      failed: count(data, `api_errors_${key}`),
       latency_ms: latency(values),
     };
   }
@@ -45,10 +47,14 @@ function buildReport(data, meta) {
     mode: meta.mode,
     target: meta.target,
     measured_seconds: seconds,
+    slow_ms: SLOW_MS,
     requests: {
       total,
+      passed: success,
       found_2xx: found,
       not_found_404: notFound,
+      failed,
+      slow,
       errors,
       success_rate: total > 0 ? success / total : 0,
     },
@@ -62,6 +68,62 @@ function buildReport(data, meta) {
   };
 }
 
+// k6's own counters. These cover EVERY request k6 made -- warm-up and the
+// setup() probe included -- whereas the api_* counters above are the measured
+// window only, so the two totals are expected to differ.
+function buildNative(data) {
+  const reqs = metric(data, 'http_reqs');
+  const failed = metric(data, 'http_req_failed');
+  const checks = metric(data, 'checks');
+  const iterations = metric(data, 'iterations');
+  const vus = metric(data, 'vus_max');
+  const received = metric(data, 'data_received');
+  const sent = metric(data, 'data_sent');
+
+  // http_req_failed is a Rate: `passes` counts the requests that WERE
+  // failures, `fails` the ones that were fine. Verified, not assumed.
+  const bad = failed ? failed.passes : 0;
+  const good = failed ? failed.fails : 0;
+
+  return {
+    http_reqs: reqs ? reqs.count : 0,
+    http_reqs_per_sec: reqs ? reqs.rate : 0,
+    http_req_failed: bad,
+    http_req_ok: good,
+    http_req_failed_rate: failed ? failed.rate : 0,
+    checks_passed: checks ? checks.passes : null,
+    checks_failed: checks ? checks.fails : null,
+    iterations: iterations ? iterations.count : 0,
+    dropped_iterations: count(data, 'dropped_iterations'),
+    vus_max: vus ? vus.max : 0,
+    data_received_mb: received ? received.count / 1e6 : 0,
+    data_sent_mb: sent ? sent.count / 1e6 : 0,
+  };
+}
+
+function nativeText(n) {
+  const lines = [];
+  const line = (s = '') => lines.push(s);
+  const row = (label, value) => line(`  ${pad(label, 22)}${value}`);
+  const total = n.http_req_failed + n.http_req_ok;
+
+  line();
+  line('K6 NATIVE COUNTERS (includes warm-up and the setup probe)');
+  row('http_reqs', `${n.http_reqs}  (${num(n.http_reqs_per_sec, 1)}/s)`);
+  row('ok', `${n.http_req_ok}  ${pct(n.http_req_ok, total)}   (200/201/404, any speed)`);
+  row('failed', `${n.http_req_failed}  ${pct(n.http_req_failed, total)}   (any other status, or no response)`);
+  if (n.checks_passed !== null) {
+    row('checks', `${n.checks_passed} passed / ${n.checks_failed} failed`);
+  } else {
+    row('checks', 'none defined -- this suite asserts via api_errors instead');
+  }
+  row('iterations', n.iterations);
+  row('dropped_iterations', n.dropped_iterations);
+  row('vus_max', n.vus_max);
+  row('data received / sent', `${num(n.data_received_mb, 1)} MB / ${num(n.data_sent_mb, 1)} MB`);
+  return lines.join('\n');
+}
+
 function toText(r) {
   const lines = [];
   const line = (s = '') => lines.push(s);
@@ -73,16 +135,17 @@ function toText(r) {
   line();
   line('THROUGHPUT');
   line(`  requests/sec          ${num(r.throughput.req_per_sec, 1)}`);
-  line(`  successful req/sec    ${num(r.throughput.successful_req_per_sec, 1)}   (200/201/404)`);
+  line(`  successful req/sec    ${num(r.throughput.successful_req_per_sec, 1)}   (passed requests only)`);
   line();
+  const q = r.requests;
   line('REQUESTS');
-  line(`  total                 ${r.requests.total}`);
-  line(`  found (200/201)       ${r.requests.found_2xx}  ${pct(r.requests.found_2xx, r.requests.total)}`);
-  line(
-    `  not found (404)       ${r.requests.not_found_404}  ${pct(r.requests.not_found_404, r.requests.total)}` +
-      '   <- no row in DB, not an error',
-  );
-  line(`  errors                ${r.requests.errors}  ${pct(r.requests.errors, r.requests.total)}`);
+  line(`  total                 ${q.total}`);
+  line(`  passed                ${q.passed}  ${pct(q.passed, q.total)}   (200/201/404 within ${r.slow_ms}ms)`);
+  line(`    found (200/201)     ${q.found_2xx}  ${pct(q.found_2xx, q.total)}`);
+  line(`    not found (404)     ${q.not_found_404}  ${pct(q.not_found_404, q.total)}   <- no row in DB, not an error`);
+  line(`  failed                ${q.failed}  ${pct(q.failed, q.total)}`);
+  line(`    ${pad(`too slow (>${r.slow_ms}ms)`, 20)}${q.slow}  ${pct(q.slow, q.total)}   <- good status, answered too late`);
+  line(`    error / no response ${q.errors}  ${pct(q.errors, q.total)}   <- 5xx (incl. DB timeout), 4xx, timeout, refused`);
   line();
   line('RESPONSE TIME (all endpoints)');
   for (const stat of TREND_STATS) line(`  ${pad(stat, 8)}${lpad(ms(r.latency_ms[stat]), 14)}`);
@@ -90,13 +153,13 @@ function toText(r) {
   line('PER ENDPOINT');
   line(
     `  ${pad('endpoint', 26)}${lpad('reqs', 9)}${lpad('req/s', 10)}${lpad('avg', 11)}` +
-      `${lpad('p95', 11)}${lpad('p99', 11)}${lpad('errors', 8)}`,
+      `${lpad('p95', 11)}${lpad('p99', 11)}${lpad('failed', 8)}`,
   );
   for (const [label, e] of Object.entries(r.endpoints)) {
     line(
       `  ${pad(label, 26)}${lpad(e.requests, 9)}${lpad(num(e.req_per_sec, 1), 10)}` +
         `${lpad(ms(e.latency_ms.avg), 11)}${lpad(ms(e.latency_ms['p(95)']), 11)}` +
-        `${lpad(ms(e.latency_ms['p(99)']), 11)}${lpad(e.errors, 8)}`,
+        `${lpad(ms(e.latency_ms['p(99)']), 11)}${lpad(e.failed, 8)}`,
     );
   }
 
@@ -120,7 +183,12 @@ function toText(r) {
 
 export function makeSummary(data, meta, file) {
   const report = buildReport(data, meta);
-  const out = { stdout: toText(report) };
+  report.k6_native = buildNative(data);
+
+  let stdout = toText(report);
+  if (NATIVE_SUMMARY) stdout += nativeText(report.k6_native) + '\n';
+
+  const out = { stdout };
   if (file) out[file] = JSON.stringify(report, null, 2);
   return out;
 }
