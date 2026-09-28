@@ -1,4 +1,6 @@
 import 'reflect-metadata';
+import cluster from 'node:cluster';
+import { availableParallelism } from 'node:os';
 import { Logger, RequestMethod, ValidationPipe } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import { WINSTON_MODULE_NEST_PROVIDER } from 'nest-winston';
@@ -48,4 +50,42 @@ async function bootstrap(): Promise<void> {
   }
 }
 
-void bootstrap();
+function startCluster(): void {
+  const workers = Number(process.env.CLUSTER_WORKERS ?? 0) || availableParallelism();
+
+  if (workers <= 1) {
+    void bootstrap();
+    return;
+  }
+
+  if (cluster.isPrimary) {
+    Logger.log(`Primary ${process.pid} forking ${workers} workers`, 'Cluster');
+    for (let i = 0; i < workers; i++) {
+      cluster.fork();
+    }
+
+    let shuttingDown = false;
+    const shutdown = (signal: NodeJS.Signals) => {
+      shuttingDown = true;
+      for (const worker of Object.values(cluster.workers ?? {})) {
+        worker?.process.kill(signal);
+      }
+    };
+    process.on('SIGINT', shutdown);
+    process.on('SIGTERM', shutdown);
+
+    cluster.on('exit', (worker, code, signal) => {
+      if (shuttingDown) return;
+      Logger.warn(
+        `Worker ${worker.process.pid} exited (${signal ?? code}), forking a replacement`,
+        'Cluster',
+      );
+      cluster.fork();
+    });
+    return;
+  }
+
+  void bootstrap();
+}
+
+startCluster();
