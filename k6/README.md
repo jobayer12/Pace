@@ -5,7 +5,7 @@ Measures the backend in [`../backend`](../backend): **response time** and
 finishes and prints a report.
 
 For server provisioning and multi-VM orchestration, see the
-[root readme](../readme.md).
+[root readme](../README.md).
 
 ## Requirements
 
