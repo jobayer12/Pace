@@ -1,3 +1,5 @@
+// Must stay first: OpenTelemetry has to patch http/express/pg before they load.
+import './telemetry/tracing';
 import 'reflect-metadata';
 import cluster from 'node:cluster';
 import { availableParallelism } from 'node:os';

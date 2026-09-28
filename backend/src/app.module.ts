@@ -6,6 +6,7 @@ import { HttpLoggerMiddleware } from './logging/http-logger.middleware';
 import { buildWinstonOptions } from './logging/winston.config';
 import { HttpMetricsMiddleware } from './metrics/http-metrics.middleware';
 import { MetricsModule } from './metrics/metrics.module';
+import { TelemetryModule } from './telemetry/telemetry.module';
 import { UsersModule } from './users/users.module';
 
 @Module({
@@ -14,6 +15,7 @@ import { UsersModule } from './users/users.module';
     WinstonModule.forRoot(buildWinstonOptions()),
     DatabaseModule,
     MetricsModule,
+    TelemetryModule,
     UsersModule,
   ],
 })

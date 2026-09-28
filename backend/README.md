@@ -177,6 +177,37 @@ scrape_configs:
       - targets: ['localhost:3000']
 ```
 
+Under clustering each worker keeps its own registry, so a scrape reports
+whichever worker happened to answer. Use the OpenTelemetry metrics below for
+cluster-wide numbers.
+
+### Tracing and metrics (OpenTelemetry)
+
+[`telemetry/tracing.ts`](src/telemetry/tracing.ts) is the first import in
+`main.ts` — auto-instrumentation can only patch `http`, `express`, `pg`, `knex`
+and `winston` if it starts before they are loaded. Every worker pushes OTLP
+to `OTEL_EXPORTER_OTLP_ENDPOINT` (the local Grafana Alloy), which forwards
+traces to Tempo and metrics to Prometheus.
+
+| Signal | What you get |
+| ------ | ------------ |
+| Traces | One trace per request: HTTP → Express/Nest handler → each `pg` query |
+| Metrics | `http.server.request.duration` histogram (seconds) with `http.route`, `http.request.method`, `http.response.status_code`; Node runtime metrics |
+| Logs | Winston lines gain `trace_id` / `span_id`, linking Loki to Tempo |
+
+- Each worker gets its own `service.instance.id` (`host-pid`); without it the
+  workers would overwrite each other's Prometheus series.
+- `/metrics` and `/docs` are not traced.
+- `OTEL_TRACES_SAMPLER_ARG` samples traces only; metrics count every request.
+- Set `OTEL_SDK_DISABLED=true` to switch it all off.
+
+p95 latency per route, once in Prometheus:
+
+```promql
+histogram_quantile(0.95,
+  sum by (le, http_route) (rate(http_server_request_duration_seconds_bucket{job="backend"}[1m])))
+```
+
 ## Row hydration (knexnest)
 
 Query results are hydrated by [knexnest](https://www.npmjs.com/package/knexnest),
