@@ -8,7 +8,8 @@ export const buildKnexConfig = (env: NodeJS.ProcessEnv = process.env): Knex.Conf
     user: env.DB_USER ?? 'postgres',
     password: env.DB_PASSWORD ?? '',
     database: env.DB_NAME ?? 'postgres',
-    statement_timeout: Number(env.DB_STATEMENT_TIMEOUT_MS ?? 3000),
+    // Client-side timeout: PgBouncer rejects `statement_timeout` as a startup parameter.
+    query_timeout: Number(env.DB_QUERY_TIMEOUT_MS ?? 3000),
   },
   acquireConnectionTimeout: Number(env.DB_ACQUIRE_TIMEOUT_MS ?? 3000),
   pool: {
