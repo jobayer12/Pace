@@ -6,7 +6,7 @@ LABEL="${1:?usage: ./run-steps.sh <label> [extra k6 args...]}"
 shift
 
 BASE_URL="${BASE_URL:-https://loadtest.jobayer.me}"
-STEPS="${STEPS:-2000}"
+STEPS="${STEPS:-3000}"
 DURATION="${DURATION:-10m}"
 COOLDOWN="${COOLDOWN:-30}"
 
