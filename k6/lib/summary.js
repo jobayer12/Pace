@@ -23,12 +23,16 @@ function latency(values) {
 function buildReport(data, meta) {
   const seconds = durationSeconds(meta.duration);
   const total = count(data, 'api_requests');
-  const found = count(data, 'api_found');
-  const notFound = count(data, 'api_not_found');
-  const errors = count(data, 'api_errors');
+  const ok200 = count(data, 'api_status_200');
+  const created201 = count(data, 'api_status_201');
+  const notFound404 = count(data, 'api_status_404');
   const slow = count(data, 'api_slow');
-  const success = found + notFound;
-  const failed = errors + slow;
+  const success = ok200 + created201 + notFound404;
+  const client4xx = count(data, 'api_status_4xx');
+  const server5xx = count(data, 'api_status_5xx');
+  const noResponse = count(data, 'api_no_response');
+  const other = count(data, 'api_status_other');
+  const failed = client4xx + server5xx + noResponse + other;
 
   const endpoints = {};
   for (const [key, label] of Object.entries(ENDPOINTS)) {
@@ -39,6 +43,7 @@ function buildReport(data, meta) {
       requests: n,
       req_per_sec: seconds > 0 ? n / seconds : 0,
       failed: count(data, `api_errors_${key}`),
+      slow: count(data, `api_slow_${key}`),
       latency_ms: latency(values),
     };
   }
@@ -50,17 +55,22 @@ function buildReport(data, meta) {
     slow_ms: SLOW_MS,
     requests: {
       total,
-      passed: success,
-      found_2xx: found,
-      not_found_404: notFound,
-      failed,
+      success,
+      status_200: ok200,
+      status_201: created201,
+      status_404: notFound404,
       slow,
-      errors,
+      failed,
+      status_4xx: client4xx,
+      status_5xx: server5xx,
+      no_response: noResponse,
+      status_other: other,
       success_rate: total > 0 ? success / total : 0,
     },
     throughput: {
       req_per_sec: seconds > 0 ? total / seconds : 0,
       successful_req_per_sec: seconds > 0 ? success / seconds : 0,
+      fast_req_per_sec: seconds > 0 ? (success - slow) / seconds : 0,
     },
     latency_ms: latency(metric(data, 'api_duration')),
     endpoints,
@@ -135,17 +145,26 @@ function toText(r) {
   line();
   line('THROUGHPUT');
   line(`  requests/sec          ${num(r.throughput.req_per_sec, 1)}`);
-  line(`  successful req/sec    ${num(r.throughput.successful_req_per_sec, 1)}   (passed requests only)`);
+  line(`  successful req/sec    ${num(r.throughput.successful_req_per_sec, 1)}   (200/201/404, any speed)`);
+  line(`    within ${pad(`${r.slow_ms}ms`, 13)}${num(r.throughput.fast_req_per_sec, 1)}`);
   line();
   const q = r.requests;
+  const row = (label, value, note = '') =>
+    line(`${pad(label, 24)}${lpad(value, 8)}  ${lpad(pct(value, q.total), 7)}${note ? `   ${note}` : ''}`);
   line('REQUESTS');
-  line(`  total                 ${q.total}`);
-  line(`  passed                ${q.passed}  ${pct(q.passed, q.total)}   (200/201/404 within ${r.slow_ms}ms)`);
-  line(`    found (200/201)     ${q.found_2xx}  ${pct(q.found_2xx, q.total)}`);
-  line(`    not found (404)     ${q.not_found_404}  ${pct(q.not_found_404, q.total)}   <- no row in DB, not an error`);
-  line(`  failed                ${q.failed}  ${pct(q.failed, q.total)}`);
-  line(`    ${pad(`too slow (>${r.slow_ms}ms)`, 20)}${q.slow}  ${pct(q.slow, q.total)}   <- good status, answered too late`);
-  line(`    error / no response ${q.errors}  ${pct(q.errors, q.total)}   <- 5xx (incl. DB timeout), 4xx, timeout, refused`);
+  line(`${pad('  total', 24)}${lpad(q.total, 8)}`);
+  line();
+  row('  SUCCESS', q.success, '(200/201/404)');
+  row('    200 OK', q.status_200);
+  row('    201 Created', q.status_201);
+  row('    404 Not Found', q.status_404, '<- no row in DB, not an error');
+  row(`    slow (>${r.slow_ms}ms)`, q.slow, '<- counted above, but answered too late');
+  line();
+  row('  FAILED', q.failed);
+  row('    4xx', q.status_4xx, '<- client error (bad request, validation, conflict)');
+  row('    5xx', q.status_5xx, '<- server error (incl. DB timeout)');
+  row('    no response', q.no_response, '<- timeout, refused, connection reset');
+  if (q.status_other > 0) row('    other', q.status_other, '<- unexpected 1xx/3xx');
   line();
   line('RESPONSE TIME (all endpoints)');
   for (const stat of TREND_STATS) line(`  ${pad(stat, 8)}${lpad(ms(r.latency_ms[stat]), 14)}`);
@@ -153,13 +172,13 @@ function toText(r) {
   line('PER ENDPOINT');
   line(
     `  ${pad('endpoint', 26)}${lpad('reqs', 9)}${lpad('req/s', 10)}${lpad('avg', 11)}` +
-      `${lpad('p95', 11)}${lpad('p99', 11)}${lpad('failed', 8)}`,
+      `${lpad('p95', 11)}${lpad('p99', 11)}${lpad('slow', 8)}${lpad('failed', 8)}`,
   );
   for (const [label, e] of Object.entries(r.endpoints)) {
     line(
       `  ${pad(label, 26)}${lpad(e.requests, 9)}${lpad(num(e.req_per_sec, 1), 10)}` +
         `${lpad(ms(e.latency_ms.avg), 11)}${lpad(ms(e.latency_ms['p(95)']), 11)}` +
-        `${lpad(ms(e.latency_ms['p(99)']), 11)}${lpad(e.failed, 8)}`,
+        `${lpad(ms(e.latency_ms['p(99)']), 11)}${lpad(e.slow, 8)}${lpad(e.failed, 8)}`,
     );
   }
 
