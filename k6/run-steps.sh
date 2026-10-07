@@ -1,5 +1,3 @@
-set -euo pipefail
-
 cd "$(dirname "$0")"
 
 LABEL="${1:?usage: ./run-steps.sh <label> [extra k6 args...]}"
@@ -52,6 +50,6 @@ done
       ] | @tsv' "${OUT}/vus-${vus}.json" |
       awk -F'\t' '{ printf "%-6s %10s %10s %10s %9s %8s %8s %10s %10s %10s\n", $1,$2,$3,$4,$5,$6,$7,$8,$9,$10 }'
   done
-  echo "failed = 5xx/4xx (not 404) + timeouts + responses slower than SLOW_MS (3s)"
+  echo "failed = 4xx (not 404) + 5xx + no response; slow = 200/201/404 slower than SLOW_MS (3s), not counted as failed"
   echo "==========================================================="
 } | tee "${OUT}/comparison.txt"

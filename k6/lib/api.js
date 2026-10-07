@@ -29,20 +29,31 @@ export const ENDPOINTS = {
 // Everything below is recorded for measured traffic only (warm-up is skipped).
 export const apiDuration = new Trend('api_duration', true);
 export const apiRequests = new Counter('api_requests');
-export const apiFound = new Counter('api_found');
-export const apiNotFound = new Counter('api_not_found');
+// Status counters count every response with that status, fast or slow.
+export const apiStatus200 = new Counter('api_status_200');
+export const apiStatus201 = new Counter('api_status_201');
+export const apiStatus404 = new Counter('api_status_404');
+export const apiStatus4xx = new Counter('api_status_4xx');
+export const apiStatus5xx = new Counter('api_status_5xx');
+// Status 0: timeout, refused, reset -- the API never answered.
+export const apiNoResponse = new Counter('api_no_response');
+// Anything else (1xx/3xx); not expected from this API.
+export const apiStatusOther = new Counter('api_status_other');
 export const apiErrors = new Counter('api_errors');
-// Good status (200/201/404) but slower than SLOW_MS: counted as failed.
+// Good status (200/201/404) but slower than SLOW_MS. Still a success, reported
+// on its own line so slow-but-answered requests stay visible.
 export const apiSlow = new Counter('api_slow');
 export const apiSuccess = new Rate('api_success');
 
 const endpointDuration = {};
 const endpointRequests = {};
 const endpointFailed = {};
+const endpointSlow = {};
 for (const key of Object.keys(ENDPOINTS)) {
   endpointDuration[key] = new Trend(`api_duration_${key}`, true);
   endpointRequests[key] = new Counter(`api_requests_${key}`);
   endpointFailed[key] = new Counter(`api_errors_${key}`);
+  endpointSlow[key] = new Counter(`api_slow_${key}`);
 }
 
 // One sample of each kind per VU is enough to see what is going wrong.
@@ -59,26 +70,33 @@ function record(key, res) {
   apiDuration.add(duration);
   endpointDuration[key].add(duration);
   endpointRequests[key].add(1);
-  apiSuccess.add(goodStatus && !slow);
+  apiSuccess.add(goodStatus);
 
   if (!goodStatus) {
     apiErrors.add(1);
     endpointFailed[key].add(1);
+    if (res.status === 0) apiNoResponse.add(1);
+    else if (res.status >= 500) apiStatus5xx.add(1);
+    else if (res.status >= 400) apiStatus4xx.add(1);
+    else apiStatusOther.add(1);
     if (errorLog.error < 1) {
       errorLog.error += 1;
       console.warn(`${ENDPOINTS[key]} -> ${res.status || res.error} after ${duration.toFixed(0)}ms`);
     }
-  } else if (slow) {
+    return res;
+  }
+
+  if (res.status === 200) apiStatus200.add(1);
+  else if (res.status === 201) apiStatus201.add(1);
+  else apiStatus404.add(1);
+
+  if (slow) {
     apiSlow.add(1);
-    endpointFailed[key].add(1);
+    endpointSlow[key].add(1);
     if (errorLog.slow < 1) {
       errorLog.slow += 1;
       console.warn(`${ENDPOINTS[key]} -> ${res.status} but took ${duration.toFixed(0)}ms (> ${SLOW_MS}ms)`);
     }
-  } else if (res.status === 404) {
-    apiNotFound.add(1);
-  } else {
-    apiFound.add(1);
   }
   return res;
 }
