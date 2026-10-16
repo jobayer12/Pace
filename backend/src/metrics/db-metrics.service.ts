@@ -1,7 +1,7 @@
 import { Inject, Injectable, OnModuleInit } from '@nestjs/common';
 import { Gauge, Histogram } from '@prometheus-io/client';
 import { Knex } from 'knex';
-import { KNEX_CONNECTION } from '../database/knex.constants';
+import { KNEX_READER, KNEX_WRITER } from '../database/knex.constants';
 import { MetricsService } from './metrics.service';
 
 interface KnexQueryEvent {
@@ -25,65 +25,77 @@ const operationOf = (sql?: string): string => {
 
 const MAX_TRACKED_QUERIES = 10_000;
 
+type Role = 'writer' | 'reader';
+
 @Injectable()
 export class DbMetricsService implements OnModuleInit {
-  private readonly queryDuration: Histogram<'operation' | 'result'>;
+  private readonly queryDuration: Histogram<'role' | 'operation' | 'result'>;
   private readonly startedAt = new Map<string, bigint>();
+  private readonly connections: ReadonlyArray<[Role, Knex]>;
 
   constructor(
-    @Inject(KNEX_CONNECTION) private readonly knex: Knex,
+    @Inject(KNEX_WRITER) writer: Knex,
+    @Inject(KNEX_READER) reader: Knex,
     private readonly metrics: MetricsService,
   ) {
+    this.connections = [
+      ['writer', writer],
+      ['reader', reader],
+    ];
+
     this.queryDuration = new Histogram({
       name: 'db_query_duration_seconds',
       help: 'PostgreSQL query latency in seconds.',
-      labelNames: ['operation', 'result'],
+      labelNames: ['role', 'operation', 'result'],
       buckets: [0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5],
       registers: [this.metrics.registry],
-    });
-
-    const poolOf = (): TarnPool | undefined =>
-      (this.knex.client as { pool?: TarnPool } | undefined)?.pool;
-
-    new Gauge({
-      name: 'db_pool_connections',
-      help: 'Knex/tarn connection pool state.',
-      labelNames: ['state'],
-      registers: [this.metrics.registry],
-      collect() {
-        const pool = poolOf();
-        if (!pool) {
-          return;
-        }
-        this.set({ state: 'used' }, pool.numUsed());
-        this.set({ state: 'free' }, pool.numFree());
-        this.set({ state: 'pending_acquires' }, pool.numPendingAcquires());
-        this.set({ state: 'pending_creates' }, pool.numPendingCreates());
-      },
     });
   }
 
   onModuleInit(): void {
-    this.knex.on('query', (query: KnexQueryEvent) => {
-      if (!query?.__knexQueryUid) {
-        return;
-      }
-      if (this.startedAt.size >= MAX_TRACKED_QUERIES) {
-        this.startedAt.clear();
-      }
-      this.startedAt.set(query.__knexQueryUid, process.hrtime.bigint());
+    const connections = this.connections;
+
+    new Gauge({
+      name: 'db_pool_connections',
+      help: 'Knex/tarn connection pool state.',
+      labelNames: ['role', 'state'],
+      registers: [this.metrics.registry],
+      collect() {
+        for (const [role, knex] of connections) {
+          const pool = (knex.client as { pool?: TarnPool } | undefined)?.pool;
+          if (!pool) {
+            continue;
+          }
+          this.set({ role, state: 'used' }, pool.numUsed());
+          this.set({ role, state: 'free' }, pool.numFree());
+          this.set({ role, state: 'pending_acquires' }, pool.numPendingAcquires());
+          this.set({ role, state: 'pending_creates' }, pool.numPendingCreates());
+        }
+      },
     });
 
-    this.knex.on('query-response', (_response: unknown, query: KnexQueryEvent) => {
-      this.observe(query, 'success');
-    });
+    for (const [role, knex] of this.connections) {
+      knex.on('query', (query: KnexQueryEvent) => {
+        if (!query?.__knexQueryUid) {
+          return;
+        }
+        if (this.startedAt.size >= MAX_TRACKED_QUERIES) {
+          this.startedAt.clear();
+        }
+        this.startedAt.set(query.__knexQueryUid, process.hrtime.bigint());
+      });
 
-    this.knex.on('query-error', (_error: unknown, query: KnexQueryEvent) => {
-      this.observe(query, 'error');
-    });
+      knex.on('query-response', (_response: unknown, query: KnexQueryEvent) => {
+        this.observe(role, query, 'success');
+      });
+
+      knex.on('query-error', (_error: unknown, query: KnexQueryEvent) => {
+        this.observe(role, query, 'error');
+      });
+    }
   }
 
-  private observe(query: KnexQueryEvent, result: 'success' | 'error'): void {
+  private observe(role: Role, query: KnexQueryEvent, result: 'success' | 'error'): void {
     const uid = query?.__knexQueryUid;
     if (!uid) {
       return;
@@ -96,7 +108,7 @@ export class DbMetricsService implements OnModuleInit {
     this.startedAt.delete(uid);
 
     this.queryDuration.observe(
-      { operation: operationOf(query.sql), result },
+      { role, operation: operationOf(query.sql), result },
       Number(process.hrtime.bigint() - startedAt) / 1e9,
     );
   }

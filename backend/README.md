@@ -33,13 +33,14 @@ Server listens on `http://localhost:3000/api`.
 | ------------- | -------------- | -------------------- |
 | `PORT`        | `3000`         | HTTP port            |
 | `DB_HOST`     | `localhost`    |                      |
-| `DB_PORT`     | `5432`         |                      |
+| `DB_PORT`     | `5432`         | Write (primary) port; also used by migrations |
+| `DB_READ_PORT` | `DB_PORT`     | Read-replica port; `SELECT`s go here |
 | `DB_USER`     | `postgres`     |                      |
 | `DB_PASSWORD` | —              |                      |
 | `DB_NAME`     | `load_testing` |                      |
 | `DB_POOL_MIN` | `2`            | Knex pool minimum    |
-| `DB_POOL_MAX` | `10`           | Knex pool maximum    |
-| `DB_STATEMENT_TIMEOUT_MS` | `3000` | Postgres cancels longer queries (request gets 500) |
+| `DB_POOL_MAX` | `10`           | Knex pool maximum, per pool (writer and reader each get one) |
+| `DB_QUERY_TIMEOUT_MS` | `3000` | Client cancels longer queries (request gets 500) |
 | `DB_ACQUIRE_TIMEOUT_MS` | `3000` | Max wait for a free pool connection (request gets 500) |
 | `LOG_LEVEL`   | `debug` (`info` in prod) | Winston level |
 | `SERVICE_NAME`| `backend`      | `service` field in JSON logs |
