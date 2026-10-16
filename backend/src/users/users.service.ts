@@ -29,8 +29,9 @@ export class UsersService {
   }
 
   async list({ page, limit }: ListUsersQueryDto): Promise<Array<User>> {
-    const offset = (page - 1) * limit;
-    return this.usersRepository.findPage(limit, offset);
+    // Assumes ids are contiguous from 1: page N starts after id (N - 1) * limit.
+    const afterId = (page - 1) * limit;
+    return this.usersRepository.findPageAfter(afterId, limit);
   }
 
   async create(dto: CreateUserDto): Promise<User> {

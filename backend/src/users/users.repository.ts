@@ -43,11 +43,17 @@ export class UsersRepository {
     return user;
   }
 
-  async findPage(limit: number, offset: number): Promise<User[]> {
-    return knexnest<User>(
-      this.reader(TABLE).select(...USER_COLUMNS).orderBy('id', 'asc').limit(limit).offset(offset),
+  /** Keyset pagination: seeks past afterId on the primary key instead of scanning an offset. */
+  async findPageAfter(afterId: number, limit: number): Promise<User[]> {
+    const users = await knexnest<User>(
+      this.reader(TABLE)
+        .select(...USER_COLUMNS)
+        .where('id', '>', afterId)
+        .orderBy('id', 'asc')
+        .limit(limit),
       true,
     );
+    return users ?? [];
   }
 
   async insert(payload: InsertUserRow): Promise<User> {
